@@ -994,6 +994,80 @@ int datum_api_client_dashboard(struct MHD_Connection *connection) {
 	return datum_api_submit_uncached_response(connection, MHD_HTTP_OK, response);
 }
 
+int datum_api_clients_json(struct MHD_Connection *connection) {
+	struct MHD_Response *response;
+	T_DATUM_MINER_DATA *m = NULL;
+	uint64_t tsms = current_time_millis();
+	unsigned char astat;
+
+	if (!datum_config.api_admin_password_len) {
+		return datum_api_do_error(connection, MHD_HTTP_FORBIDDEN);
+	}
+	if (!datum_api_check_admin_password_httponly(connection, datum_api_create_empty_mhd_response)) {
+		return MHD_YES;
+	}
+
+	json_t *root = json_object();
+	json_t *clients = json_array();
+	json_object_set_new(root, "timestampMs", json_integer((json_int_t)tsms));
+	json_object_set_new(root, "clients", clients);
+
+	const int max_threads = global_stratum_app ? global_stratum_app->max_threads : 0;
+	for (int j = 0; j < max_threads; ++j) {
+		for (int ii = 0; ii < global_stratum_app->max_clients_thread; ii++) {
+			if (global_stratum_app->datum_threads[j].client_data[ii].fd <= 0) {
+				continue;
+			}
+
+			m = (T_DATUM_MINER_DATA *)global_stratum_app->datum_threads[j].client_data[ii].app_client_data;
+			json_t *client = json_object();
+			json_object_set_new(client, "threadId", json_integer(j));
+			json_object_set_new(client, "clientId", json_integer(ii));
+			json_object_set_new(client, "remoteHost", json_string(global_stratum_app->datum_threads[j].client_data[ii].rem_host));
+			json_object_set_new(client, "username", json_string(m->last_auth_username));
+			json_object_set_new(client, "subscribed", json_boolean(m->subscribed));
+			json_object_set_new(client, "authorized", json_boolean(m->authorized));
+			json_object_set_new(client, "unsafeFullCoinbaseOverride", json_boolean(m->force_coinbase_unsafe_override));
+			json_object_set_new(client, "waitingForUnsafeOverride", json_boolean(m->force_coinbase_waiting_for_authorize));
+			json_object_set_new(client, "currentDifficulty", json_integer((json_int_t)m->current_diff));
+			json_object_set_new(client, "acceptedShareCount", json_integer((json_int_t)m->share_count_accepted));
+			json_object_set_new(client, "acceptedShareDifficulty", json_integer((json_int_t)m->share_diff_accepted));
+			json_object_set_new(client, "rejectedShareCount", json_integer((json_int_t)m->share_count_rejected));
+			json_object_set_new(client, "rejectedShareDifficulty", json_integer((json_int_t)m->share_diff_rejected));
+			json_object_set_new(client, "userAgent", json_string(m->useragent));
+			if (m->coinbase_selection < (sizeof(cbnames) / sizeof(cbnames[0]))) {
+				json_object_set_new(client, "coinbaseClass", json_string(cbnames[m->coinbase_selection]));
+			} else {
+				json_object_set_new(client, "coinbaseClass", json_string("Unknown"));
+			}
+			json_object_set_new(client, "coinbaseClassId", json_integer(m->coinbase_selection));
+			if (m->stats.last_share_tsms) {
+				json_object_set_new(client, "lastShareAgeSeconds", json_real((double)(tsms - m->stats.last_share_tsms)/1000.0));
+			} else {
+				json_object_set_new(client, "lastShareAgeSeconds", json_null());
+			}
+			astat = m->stats.active_index?0:1;
+			if ((m->stats.last_swap_ms > 0) && (m->stats.diff_accepted[astat] > 0)) {
+				double hr = ((double)m->stats.diff_accepted[astat] / (double)((double)m->stats.last_swap_ms/1000.0)) * 0.004294967296;
+				json_object_set_new(client, "hashrateThs", json_real(hr));
+			} else {
+				json_object_set_new(client, "hashrateThs", json_null());
+			}
+			json_array_append_new(clients, client);
+		}
+	}
+
+	char *payload = json_dumps(root, JSON_COMPACT);
+	json_decref(root);
+	if (!payload) {
+		return MHD_NO;
+	}
+
+	response = MHD_create_response_from_buffer(strlen(payload), payload, MHD_RESPMEM_MUST_FREE);
+	MHD_add_response_header(response, "Content-Type", "application/json");
+	return datum_api_submit_uncached_response(connection, MHD_HTTP_OK, response);
+}
+
 size_t datum_api_fill_config_var(const char *var_start, const size_t var_name_len, char * const replacement, const size_t replacement_max_len, const T_DATUM_API_DASH_VARS * const vardata) {
 	const char *colon_pos = memchr(var_start, ':', var_name_len);
 	const char *var_start_2 = colon_pos ? &colon_pos[1] : var_start;
@@ -1828,6 +1902,9 @@ enum MHD_Result datum_api_answer(void *cls, struct MHD_Connection *connection, c
 		case 'c': {
 			if (!strcmp(url, "/clients")) {
 				return datum_api_client_dashboard(connection);
+			}
+			if (!strcmp(url, "/clients.json")) {
+				return datum_api_clients_json(connection);
 			}
 			if (!strcmp(url, "/coinbaser")) {
 				return datum_api_coinbaser(connection);
