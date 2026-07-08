@@ -231,6 +231,9 @@ typedef struct {
 	
 	bool authorized;
 	bool subscribed;
+	bool force_coinbase_unsafe_override;
+	bool force_coinbase_waiting_for_authorize;
+	unsigned char pending_forced_coinbase_selection;
 	uint64_t subscribe_tsms;
 	
 	uint64_t last_sent_diff;

@@ -61,6 +61,11 @@
 #include "datum_protocol.h"
 #include "datum_pow.h"
 
+static const char * const DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE = "UNSAFE_FULL_COINBASE";
+
+static bool datum_stratum_password_has_unsafe_full_coinbase_override(const char *password);
+static void datum_stratum_send_initial_work(T_DATUM_CLIENT_DATA *c);
+
 T_DATUM_SOCKET_APP *global_stratum_app = NULL;
 
 int stratum_job_next = 0;
@@ -1556,7 +1561,10 @@ int client_mining_configure(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj) {
 	char s[256];
 	const char *username_s;
+	const char *password_s;
 	json_t *username;
+	json_t *password;
+	bool release_deferred_work = false;
 	
 	T_DATUM_MINER_DATA * const m = c->app_client_data;
 	
@@ -1572,6 +1580,28 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	
 	strncpy(m->last_auth_username, username_s, sizeof(m->last_auth_username) - 1);
 	m->last_auth_username[sizeof(m->last_auth_username)-1] = 0;
+
+	password = json_array_get(params_obj, 1);
+	if (json_is_string(password)) {
+		password_s = json_string_value(password);
+		if (datum_stratum_password_has_unsafe_full_coinbase_override(password_s)) {
+			m->force_coinbase_unsafe_override = true;
+		}
+	}
+
+	if (m->force_coinbase_waiting_for_authorize) {
+		if (!m->force_coinbase_unsafe_override) {
+			DLOG_WARN("Disconnecting Stratum client \"%s\": forced coinbase template is larger than fingerprinted safe class and password override was not supplied", m->useragent);
+			snprintf(s, sizeof(s), "{\"error\":[20,\"Miner firmware appears incompatible with this forced coinbase size. Use password %s only for risky controlled testing.\",null],\"id\":%"PRIu64",\"result\":null}\n", DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE, id);
+			datum_socket_send_string_to_client(c, s);
+			return -1;
+		}
+
+		DLOG_WARN("Unsafe full-coinbase override enabled for Stratum client \"%s\"; serving forced coinbase class %u despite fingerprinted incompatibility", m->useragent, m->pending_forced_coinbase_selection);
+		m->coinbase_selection = m->pending_forced_coinbase_selection;
+		m->force_coinbase_waiting_for_authorize = false;
+		release_deferred_work = true;
+	}
 	
 	char idbuf[160];
 	stratum_rpc_id_text(c, id, idbuf, sizeof(idbuf));
@@ -1580,6 +1610,10 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	stratum_rpc_id_clear(c);
 	
 	m->authorized = true;
+
+	if (release_deferred_work) {
+		datum_stratum_send_initial_work(c);
+	}
 	
 	return 0;
 }
@@ -1932,6 +1966,32 @@ static bool datum_stratum_force_coinbase_selection(void) {
 	return false;
 }
 
+static bool datum_stratum_password_has_unsafe_full_coinbase_override(const char *password) {
+	return password && strstr(password, DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE) != NULL;
+}
+
+static void datum_stratum_reset_vardiff_tallies(T_DATUM_MINER_DATA *m) {
+	m->share_count_since_snap = 0;
+	m->share_diff_since_snap = 0;
+	m->share_snap_tsms = m->sdata->loop_tsms;
+	m->subscribe_tsms = m->sdata->loop_tsms;
+}
+
+static void datum_stratum_send_initial_work(T_DATUM_CLIENT_DATA *c) {
+	T_DATUM_MINER_DATA * const m = c->app_client_data;
+
+	// send them their current difficulty before sending a job
+	send_mining_set_difficulty(c);
+
+	// mark them as subscribed so that notifies actually work
+	m->subscribed = true;
+
+	// clean work on connect, not quickdiff, doesn't matter if new block or not (don't need empty work speedup on connect)
+	send_mining_notify(c,true,false,false);
+
+	datum_stratum_reset_vardiff_tallies(m);
+}
+
 int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj) {
 	uint32_t sid;
 	char s[1024];
@@ -1975,10 +2035,13 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 			datum_stratum_fingerprint_by_UA(m);
 			fingerprinted_coinbase_selection = m->coinbase_selection;
 			if (datum_stratum_coinbase_selection_capacity(fingerprinted_coinbase_selection) < datum_stratum_coinbase_selection_capacity(forced_coinbase_selection)) {
-				DLOG_WARN("Disconnecting Stratum client \"%s\": fingerprinted coinbase class %u is smaller than forced class %u", m->useragent, fingerprinted_coinbase_selection, forced_coinbase_selection);
-				snprintf(s, sizeof(s), "{\"error\":[20,\"Miner firmware appears incompatible with the forced coinbase size configured on this DATUM Gateway\",null],\"id\":%"PRIu64",\"result\":null}\n", id);
-				datum_socket_send_string_to_client(c, s);
-				return -1;
+				if (!m->force_coinbase_unsafe_override) {
+					DLOG_WARN("Deferring Stratum work for \"%s\": fingerprinted coinbase class %u is smaller than forced class %u; waiting for password override", m->useragent, fingerprinted_coinbase_selection, forced_coinbase_selection);
+					m->force_coinbase_waiting_for_authorize = true;
+					m->pending_forced_coinbase_selection = forced_coinbase_selection;
+				} else {
+					DLOG_WARN("Unsafe full-coinbase override was already enabled for Stratum client \"%s\"; serving forced coinbase class %u despite fingerprinted incompatibility", m->useragent, forced_coinbase_selection);
+				}
 			}
 		}
 		m->coinbase_selection = forced_coinbase_selection;
@@ -2002,21 +2065,13 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%s,\"result\":[[[\"mining.notify\",\"%8.8x1\"],[\"mining.set_difficulty\",\"%8.8x2\"]],\"%8.8x\",8]}\n", idbuf, sid, sid, sid);
 	stratum_rpc_id_clear(c);
 	datum_socket_send_string_to_client(c, s);
-	
-	// send them their current difficulty before sending a job
-	send_mining_set_difficulty(c);
-	
-	// mark them as subscribed so that notifies actually work
-	m->subscribed = true;
-	
-	// clean work on connect, not quickdiff, doesn't matter if new block or not (don't need empty work speedup on connect)
-	send_mining_notify(c,true,false,false);
-	
-	// reset vardiff tallies
-	m->share_count_since_snap = 0;
-	m->share_diff_since_snap = 0;
-	m->share_snap_tsms = m->sdata->loop_tsms;
-	m->subscribe_tsms = m->sdata->loop_tsms;
+
+	if (m->force_coinbase_waiting_for_authorize) {
+		datum_stratum_reset_vardiff_tallies(m);
+		return 0;
+	}
+
+	datum_stratum_send_initial_work(c);
 	
 	return 0;
 }

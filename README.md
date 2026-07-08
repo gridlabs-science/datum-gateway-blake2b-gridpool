@@ -186,6 +186,14 @@ client instead of serving an oversized template. Unknown or unfingerprinted
 clients are still served optimistically because the Gateway has no reliable
 compatibility signal for them.
 
+For controlled lab testing only, a miner can opt into receiving the forced
+template despite a known-incompatible fingerprint by including
+`UNSAFE_FULL_COINBASE` in the Stratum password field. This is intentionally
+risky. Some miner firmware has been reported to lock up when served oversized
+coinbase templates. Use this override only when testing a specific firmware
+version and when you can physically or remotely recover the miner if it stops
+responding.
+
 This is a local Gateway policy setting. It does not change the DATUM wire
 protocol and it does not require support from the upstream DATUM server. A
 Gateway using the default `auto` mode remains compatible with existing DATUM

@@ -918,7 +918,7 @@ int datum_api_client_dashboard(struct MHD_Connection *connection) {
 		return MHD_YES;
 	}
 	
-	sz += snprintf(&output[sz], max_sz-1-sz, "<form action='/cmd' method='post'><input type='hidden' name='csrf' value='%s' /><TABLE><TR><TD><U>TID/CID</U></TD>  <TD><U>RemHost</U></TD>  <TD><U>Auth Username</U></TD> <TD><U>Subbed</U></TD> <TD><U>Last Accepted</U></TD> <TD><U>VDiff</U></TD> <TD><U>DiffA (A)</U></TD> <TD><U>DiffR (R)</U></TD> <TD><U>Hashrate (age)</U></TD> <TD><U>Coinbase</U></TD> <TD><U>UserAgent</U> </TD><TD><U>Command</U></TD></TR>", datum_config.api_csrf_token);
+	sz += snprintf(&output[sz], max_sz-1-sz, "<form action='/cmd' method='post'><input type='hidden' name='csrf' value='%s' /><TABLE><TR><TD><U>TID/CID</U></TD>  <TD><U>RemHost</U></TD>  <TD><U>Auth Username</U></TD> <TD><U>Subbed</U></TD> <TD><U>Last Accepted</U></TD> <TD><U>VDiff</U></TD> <TD><U>DiffA (A)</U></TD> <TD><U>DiffR (R)</U></TD> <TD><U>Hashrate (age)</U></TD> <TD><U>Coinbase</U></TD> <TD><U>Unsafe</U></TD> <TD><U>UserAgent</U> </TD><TD><U>Command</U></TD></TR>", datum_config.api_csrf_token);
 	
 	for (j = 0; j < max_threads; ++j) {
 		for(ii=0;ii<global_stratum_app->max_clients_thread;ii++) {
@@ -969,6 +969,8 @@ int datum_api_client_dashboard(struct MHD_Connection *connection) {
 					} else {
 						sz += snprintf(&output[sz], max_sz-1-sz, "<TD>Unknown</TD>");
 					}
+
+					sz += snprintf(&output[sz], max_sz-1-sz, "<TD>%s</TD>", m->force_coinbase_unsafe_override ? "yes" : "no");
 					
 					sz += snprintf(&output[sz], max_sz-1-sz, "<TD>");
 					sz += strncpy_html_escape(&output[sz], m->useragent, max_sz-1-sz);
