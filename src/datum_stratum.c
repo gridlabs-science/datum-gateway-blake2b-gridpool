@@ -1852,12 +1852,12 @@ int send_mining_set_difficulty(T_DATUM_CLIENT_DATA *c) {
 	return 0;
 }
 
-void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
+bool datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 	// TODO: Make this a little more efficient. perhaps move to a loadable definitions file of some kind.
 	
 	if (strstr(m->useragent, "Antminer A3") == m->useragent) {
 		m->coinbase_selection = 0;
-		return;
+		return true;
 	}
 
 	// S21 tested to handle 2.25KB coinbase work on all versions released
@@ -1865,28 +1865,28 @@ void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 	// S21 Pro NOT confirmed to work this way (yet)... so keep the /
 	if (strstr(m->useragent, "Antminer S21/") == m->useragent) {
 		m->coinbase_selection = 5; // ANTMAIN2
-		return;
+		return true;
 	}
 	
 	// the ePIC control boards can handle almost any size coinbase
 	// UA starts with: PowerPlay-BM/
 	if (strstr(m->useragent, "PowerPlay-BM/") == m->useragent) {
 		m->coinbase_selection = 4; // YUGE
-		return;
+		return true;
 	}
 	
 	// "vinsh" reports as xminer
 	// Tested to handle up to 16KB
 	if (strstr(m->useragent, "xminer-1.") == m->useragent) {
 		m->coinbase_selection = 4; // YUGE
-		return;
+		return true;
 	}
 	
 	// whatsminer works fine with about a 6.5 KB coinbase
 	// UA starts with: whatsminer/v1
 	if (strstr(m->useragent, "whatsminer/v1") == m->useragent) {
 		m->coinbase_selection = 3; // RESPECTABLE
-		return;
+		return true;
 	}
 	
 	// Braiins firmware
@@ -1895,7 +1895,7 @@ void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 	// UA contains: bosminer-plus-tuner
 	if (strstr(m->useragent, "bosminer-plus-tuner") != NULL) { // match anywhere in string, not just beginning
 		m->coinbase_selection = 5; // ANTMAIN2
-		return;
+		return true;
 	}
 	
 	// Nicehash, sadly needs a smaller coinbase than even antminer s19s
@@ -1904,7 +1904,7 @@ void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 		m->current_diff=524288;
 		m->forced_high_min_diff=524288;
 		m->coinbase_selection = 1; // TINY
-		return;
+		return true;
 	}
 	
 	// The Bitaxe is tested to work with a large coinbase
@@ -1913,8 +1913,10 @@ void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 	// is probably not a bad plan, given the low odds of a bitaxe finding a block.
 	if (strstr(m->useragent, "bitaxe") == m->useragent) {
 		m->coinbase_selection = 3; // RESPECTABLE
-		return;
+		return true;
 	}
+
+	return false;
 }
 
 static unsigned char datum_stratum_coinbase_selection_from_config(void) {
@@ -2012,6 +2014,7 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	json_t *useragent;
 	unsigned char forced_coinbase_selection;
 	unsigned char fingerprinted_coinbase_selection;
+	bool fingerprinted;
 	
 	// params =
 	// 0 = UA
@@ -2045,9 +2048,9 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	if (datum_stratum_force_coinbase_selection()) {
 		forced_coinbase_selection = datum_stratum_coinbase_selection_from_config();
 		if ((datum_config.stratum_v1_fingerprint_miners) && (m->useragent[0])) {
-			datum_stratum_fingerprint_by_UA(m);
+			fingerprinted = datum_stratum_fingerprint_by_UA(m);
 			fingerprinted_coinbase_selection = m->coinbase_selection;
-			if (datum_stratum_coinbase_selection_capacity(fingerprinted_coinbase_selection) < datum_stratum_coinbase_selection_capacity(forced_coinbase_selection)) {
+			if (fingerprinted && datum_stratum_coinbase_selection_capacity(fingerprinted_coinbase_selection) < datum_stratum_coinbase_selection_capacity(forced_coinbase_selection)) {
 				if (!m->force_coinbase_unsafe_override) {
 					DLOG_WARN("Deferring Stratum work for \"%s\": fingerprinted coinbase class %u is smaller than forced class %u; waiting for password override", m->useragent, fingerprinted_coinbase_selection, forced_coinbase_selection);
 					m->force_coinbase_waiting_for_authorize = true;
@@ -2055,6 +2058,8 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 				} else {
 					DLOG_WARN("Unsafe full-coinbase override was already enabled for Stratum client \"%s\"; serving forced coinbase class %u despite fingerprinted incompatibility", m->useragent, forced_coinbase_selection);
 				}
+			} else if (!fingerprinted) {
+				DLOG_INFO("Serving forced coinbase class %u to unverified Stratum client \"%s\"", forced_coinbase_selection, m->useragent);
 			}
 		}
 		m->coinbase_selection = forced_coinbase_selection;

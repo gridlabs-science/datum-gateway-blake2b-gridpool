@@ -182,6 +182,24 @@ static void datum_blake2b_coinbase_limit_tests(void) {
        datum_test(datum_stratum_coinbase_fit_to_template(1000, 0, &job) == 866);
 }
 
+static void datum_stratum_fingerprint_recognizes_only_known_firmware_tests(void) {
+	T_DATUM_MINER_DATA miner;
+
+	memset(&miner, 0, sizeof(miner));
+	miner.coinbase_selection = COINBASE_TYPE_ANTMAIN;
+	strcpy(miner.useragent, "GridLabs-Blake-TestRig/0.1");
+	datum_test(!datum_stratum_fingerprint_by_UA(&miner));
+	datum_test(miner.coinbase_selection == COINBASE_TYPE_ANTMAIN);
+
+	strcpy(miner.useragent, "NiceHash/2.0");
+	datum_test(datum_stratum_fingerprint_by_UA(&miner));
+	datum_test(miner.coinbase_selection == COINBASE_TYPE_SMALL);
+
+	strcpy(miner.useragent, "PowerPlay-BM/1.0");
+	datum_test(datum_stratum_fingerprint_by_UA(&miner));
+	datum_test(miner.coinbase_selection == COINBASE_TYPE_YUGE);
+}
+
 static void datum_blake2b_refresh_time_offset_tests(void) {
        T_DATUM_TEMPLATE_DATA tdata;
        T_DATUM_STRATUM_JOB job;
@@ -877,6 +895,7 @@ void datum_stratum_tests(void) {
 	datum_stratum_string_request_id_tests();
 	datum_gbt_header_fields_tests();
 	datum_gbt_rules_blake2b_tests();
+	datum_stratum_fingerprint_recognizes_only_known_firmware_tests();
     datum_blake2b_coinbase_limit_tests();
     datum_blake2b_client_pot_commitment_tests();
     datum_blake2b_refresh_time_offset_tests();

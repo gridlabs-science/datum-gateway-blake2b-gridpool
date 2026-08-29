@@ -286,6 +286,7 @@ size_t datum_stratum_coinbase_for_block_hex(char *out, size_t out_size, const ui
 bool datum_stratum_block_needs_witness(const T_DATUM_STRATUM_JOB *job, bool subsidy_only);
 void generate_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool empty_only);
 int send_mining_set_difficulty(T_DATUM_CLIENT_DATA *c);
+bool datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m);
 bool stratum_latest_empty_check_ready_for_full(void);
 
 // Server thread main loop
