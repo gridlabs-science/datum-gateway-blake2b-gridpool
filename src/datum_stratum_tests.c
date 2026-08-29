@@ -229,7 +229,7 @@ static void datum_blake2b_refresh_time_offset_tests(void) {
 static void datum_blake2b_client_pot_commitment_tests(void) {
        T_DATUM_TEMPLATE_DATA tdata;
        T_DATUM_STRATUM_JOB job;
-       unsigned char c_ff[32], c_pot[32], c_from_txn[32];
+       unsigned char c_ff[32], c_pot[32], c_from_txn[32], c_yuge[32], c_yuge_from_txn[32];
        unsigned char sia_ff[39], sia_pot[39];
        unsigned char cb_txn[64];
        size_t cb_len;
@@ -261,6 +261,21 @@ static void datum_blake2b_client_pot_commitment_tests(void) {
        cb_txn[job.target_pot_index] = 14;
        datum_test(datum_stratum_job_blake2b_commitment_from_txn(&job, cb_txn, cb_len, c_from_txn));
        datum_test(!memcmp(c_from_txn, c_pot, 32));
+
+       job.coinbase[COINBASE_TYPE_YUGE].coinb1_len = 20;
+       job.coinbase[COINBASE_TYPE_YUGE].coinb2_len = 8;
+       memset(job.coinbase[COINBASE_TYPE_YUGE].coinb1_bin, 0x33, 20);
+       memset(job.coinbase[COINBASE_TYPE_YUGE].coinb2_bin, 0x44, 8);
+       job.coinbase[COINBASE_TYPE_YUGE].coinb1_bin[4] = 0xFF;
+       datum_test(datum_stratum_job_blake2b_commitment_for_coinbase(&job, COINBASE_TYPE_YUGE, 14, c_yuge, NULL));
+       datum_test(memcmp(c_yuge, c_pot, 32) != 0);
+       memcpy(cb_txn, job.coinbase[COINBASE_TYPE_YUGE].coinb1_bin, job.coinbase[COINBASE_TYPE_YUGE].coinb1_len);
+       memset(cb_txn + job.coinbase[COINBASE_TYPE_YUGE].coinb1_len, 0, 12);
+       memcpy(cb_txn + job.coinbase[COINBASE_TYPE_YUGE].coinb1_len + 12, job.coinbase[COINBASE_TYPE_YUGE].coinb2_bin, job.coinbase[COINBASE_TYPE_YUGE].coinb2_len);
+       cb_txn[job.target_pot_index] = 14;
+       datum_test(datum_stratum_job_blake2b_commitment_from_txn(&job, cb_txn, cb_len, c_yuge_from_txn));
+       datum_test(!memcmp(c_yuge_from_txn, c_yuge, 32));
+       datum_test(!datum_stratum_job_blake2b_commitment_for_coinbase(&job, MAX_COINBASE_TYPES, 14, c_yuge, NULL));
 }
 
 static void datum_block_coinbase_witness_tests(void) {

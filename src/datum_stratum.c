@@ -64,6 +64,7 @@
 static const char * const DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE = "UNSAFE_FULL_COINBASE";
 
 static bool datum_stratum_password_has_unsafe_full_coinbase_override(const char *password);
+static bool datum_stratum_force_coinbase_selection(void);
 static void datum_stratum_send_initial_work(T_DATUM_CLIENT_DATA *c);
 
 T_DATUM_SOCKET_APP *global_stratum_app = NULL;
@@ -1592,7 +1593,11 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	if (m->force_coinbase_waiting_for_authorize) {
 		if (!m->force_coinbase_unsafe_override) {
 			DLOG_WARN("Disconnecting Stratum client \"%s\": forced coinbase template is larger than fingerprinted safe class and password override was not supplied", m->useragent);
-			snprintf(s, sizeof(s), "{\"error\":[20,\"Miner firmware appears incompatible with this forced coinbase size. Use password %s only for risky controlled testing.\",null],\"id\":%"PRIu64",\"result\":null}\n", DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE, id);
+			if (datum_config.stratum_v1_allow_unsafe_coinbase_override) {
+				snprintf(s, sizeof(s), "{\"error\":[20,\"Miner firmware appears incompatible with this forced coinbase size. Use password %s only for risky controlled testing.\",null],\"id\":%"PRIu64",\"result\":null}\n", DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE, id);
+			} else {
+				snprintf(s, sizeof(s), "{\"error\":[20,\"Miner firmware is incompatible with the required full coinbase template.\",null],\"id\":%"PRIu64",\"result\":null}\n", id);
+			}
 			datum_socket_send_string_to_client(c, s);
 			return -1;
 		}
@@ -1713,19 +1718,26 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 		}
 	}
 	
-	// We'll use the client's send buffer for sanity, since in this environment it wont result in a partial send and we can just build up the string in the output buffer
-	datum_socket_send_string_to_client(c, "{\"id\":null,\"method\":\"mining.notify\",\"params\":[");
-	
 	if (j->job_state >= JOB_STATE_FULL_PRIORITY_WAIT_COINBASER) {
 		if (((T_DATUM_STRATUM_THREADPOOL_DATA *)t->app_thread_data)->full_coinbase_ready) {
 			full_coinbase = true;
 		}
 	}
+	if (stratum_job_is_blake2b(j) && datum_stratum_force_coinbase_selection() &&
+		j->need_coinbaser && !full_coinbase) {
+		DLOG_WARN("Withholding Blake2b work until the forced full coinbase is ready");
+		return 0;
+	}
+
+	// We'll use the client's send buffer for sanity, since in this environment it wont result in a partial send and we can just build up the string in the output buffer
+	datum_socket_send_string_to_client(c, "{\"id\":null,\"method\":\"mining.notify\",\"params\":[");
 	
 	// coinbase selection is tacked on to the job ID
 	// prepending a Q means it's a duplicate job, but with a new diff (needed per stratum protocol "spec")
 	// prepending an N means this is an empty (subsidy-only) block with a small coinbase and has coinbase ID 255/0xff
-	if (new_block || stratum_job_is_blake2b(j)) {
+	if (stratum_job_is_blake2b(j) && datum_stratum_force_coinbase_selection()) {
+		cbselect = m->coinbase_selection;
+	} else if (new_block) {
 		cbselect = 0;
 	} else {
 		if (full_coinbase) {
@@ -1752,7 +1764,7 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	datum_socket_send_string_to_client(c, s);
 	if (stratum_job_is_blake2b(j)) {
 		tdiff = floorPoT(m->last_sent_diff);
-		if (!datum_stratum_job_blake2b_commitment(j, tdiff, blake2b_commitment, blake2b_sia_coinb1)) {
+		if (!datum_stratum_job_blake2b_commitment_for_coinbase(j, cbselect, tdiff, blake2b_commitment, blake2b_sia_coinb1)) {
 			return -1;
 		}
 		for(i=0;i<(int)sizeof(blake2b_sia_coinb1);i++) {
@@ -1967,7 +1979,8 @@ static bool datum_stratum_force_coinbase_selection(void) {
 }
 
 static bool datum_stratum_password_has_unsafe_full_coinbase_override(const char *password) {
-	return password && strstr(password, DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE) != NULL;
+	return datum_config.stratum_v1_allow_unsafe_coinbase_override && password &&
+		strstr(password, DATUM_STRATUM_UNSAFE_FULL_COINBASE_PHRASE) != NULL;
 }
 
 static void datum_stratum_reset_vardiff_tallies(T_DATUM_MINER_DATA *m) {
@@ -2331,13 +2344,13 @@ bool datum_stratum_job_blake2b_commitment_from_txn(const T_DATUM_STRATUM_JOB *s,
 		td->xor_key, td->merge_mining_rhs);
 }
 
-bool datum_stratum_job_blake2b_commitment(T_DATUM_STRATUM_JOB *s, unsigned char pot, unsigned char *commitment, unsigned char *sia_coinb1) {
+bool datum_stratum_job_blake2b_commitment_for_coinbase(T_DATUM_STRATUM_JOB *s, unsigned char coinbase_index, unsigned char pot, unsigned char *commitment, unsigned char *sia_coinb1) {
 	unsigned char cb_txn[MAX_COINBASE_TXN_SIZE_BYTES];
 	const T_DATUM_STRATUM_COINBASE *cb;
 	size_t cb_len;
 	
-	if (!s || !commitment) return false;
-	cb = &s->coinbase[0];
+	if (!s || !commitment || coinbase_index >= MAX_COINBASE_TYPES) return false;
+	cb = &s->coinbase[coinbase_index];
 	if (cb->coinb1_len < 1) return false;
 	cb_len = (size_t)cb->coinb1_len + 12 + (size_t)cb->coinb2_len;
 	if (cb_len > sizeof(cb_txn)) return false;
@@ -2350,6 +2363,10 @@ bool datum_stratum_job_blake2b_commitment(T_DATUM_STRATUM_JOB *s, unsigned char 
 	if (!datum_stratum_job_blake2b_commitment_from_txn(s, cb_txn, cb_len, commitment)) return false;
 	if (sia_coinb1) datum_blake2b_sia_coinb1(sia_coinb1, commitment);
 	return true;
+}
+
+bool datum_stratum_job_blake2b_commitment(T_DATUM_STRATUM_JOB *s, unsigned char pot, unsigned char *commitment, unsigned char *sia_coinb1) {
+	return datum_stratum_job_blake2b_commitment_for_coinbase(s, COINBASE_TYPE_TINY, pot, commitment, sia_coinb1);
 }
 
 void datum_stratum_job_refresh_blake2b(T_DATUM_STRATUM_JOB *s) {

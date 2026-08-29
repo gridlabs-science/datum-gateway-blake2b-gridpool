@@ -167,7 +167,8 @@ the same coinbase class:
 {
 	"stratum": {
 		"coinbase_selection_mode": "force",
-		"coinbase_selection": "yuge"
+		"coinbase_selection": "yuge",
+		"allow_unsafe_coinbase_override": false
 	}
 }
 ```
@@ -175,7 +176,8 @@ the same coinbase class:
 `coinbase_selection_mode` defaults to `auto`, preserving existing fingerprint
 behavior. In `force` mode, `coinbase_selection` accepts `tiny`, `default`,
 `respectable`, `yuge`, `antmain2`, or numeric values `0` through `5` matching
-the Gateway's internal coinbase classes. Pools using forced mode should test
+the Gateway's internal coinbase classes. Unknown modes and selections fail
+Gateway startup instead of silently falling back. Pools using forced mode should test
 their target miner firmware before production use.
 
 When forced mode is active and miner fingerprinting is enabled, the Gateway
@@ -186,13 +188,20 @@ client instead of serving an oversized template. Unknown or unfingerprinted
 clients are still served optimistically because the Gateway has no reliable
 compatibility signal for them.
 
-For controlled lab testing only, a miner can opt into receiving the forced
+For controlled private-lab testing only, an operator can set
+`allow_unsafe_coinbase_override` to `true`; a miner can then opt into the forced
 template despite a known-incompatible fingerprint by including
 `UNSAFE_FULL_COINBASE` in the Stratum password field. This is intentionally
-risky. Some miner firmware has been reported to lock up when served oversized
+risky and the option defaults to `false`; keep it disabled on public listeners.
+Some miner firmware has been reported to lock up when served oversized
 coinbase templates. Use this override only when testing a specific firmware
 version and when you can physically or remotely recover the miner if it stops
 responding.
+
+For Blake2b jobs, forced mode binds the configured coinbase class into the job
+ID and the H2 commitment. If a DATUM coinbaser is still constructing the full
+template, the Gateway withholds Blake2b work rather than serving the class-0
+fallback and risking a truncated payout list.
 
 This is a local Gateway policy setting. It does not change the DATUM wire
 protocol and it does not require support from the upstream DATUM server. A

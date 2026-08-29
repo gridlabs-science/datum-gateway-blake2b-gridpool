@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdbool.h>
 #include <jansson.h>
 
@@ -105,6 +106,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = &datum_config.stratum_v1_share_stale_seconds, 		.default_int = 120 },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "stratum", 		.name = "fingerprint_miners",		.description = "Attempt to fingerprint miners for better use of coinbase space",
 		.required = false, .ptr = &datum_config.stratum_v1_fingerprint_miners, 			.default_bool = true },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "stratum", 		.name = "allow_unsafe_coinbase_override",	.description = "Allow fingerprinted-incompatible miners to request a forced larger coinbase using the unsafe testing password phrase. Keep disabled on public listeners.",
+		.required = false, .ptr = &datum_config.stratum_v1_allow_unsafe_coinbase_override, 	.default_bool = false },
 	{ .var_type = DATUM_CONF_STRING,	.category = "stratum",		.name = "coinbase_selection_mode",	.description = "How to select Stratum client coinbase size class. \"auto\" preserves miner fingerprinting; \"force\" uses stratum.coinbase_selection for every miner.",
 		.required = false, .ptr = datum_config.stratum_v1_coinbase_selection_mode, .default_string[0] = "auto", .max_string_len = sizeof(datum_config.stratum_v1_coinbase_selection_mode) },
 	{ .var_type = DATUM_CONF_STRING,	.category = "stratum",		.name = "coinbase_selection",		.description = "Coinbase size class used when stratum.coinbase_selection_mode is \"force\". Accepted values include tiny, default, respectable, yuge, and antmain2.",
@@ -599,6 +602,38 @@ int datum_read_config(const char *conffile) {
 	
 	if (datum_config.stratum_v1_max_clients > (datum_config.stratum_v1_max_clients_per_thread*datum_config.stratum_v1_max_threads)) {
 		DLOG_FATAL("Stratum server configuration error. Max clients too high for thread settings");
+		return 0;
+	}
+
+	if (strcasecmp(datum_config.stratum_v1_coinbase_selection_mode, "auto") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection_mode, "force")) {
+		DLOG_FATAL("stratum.coinbase_selection_mode must be either \"auto\" or \"force\".");
+		return 0;
+	}
+	if (!strcasecmp(datum_config.stratum_v1_coinbase_selection_mode, "force") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "blank") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "empty") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "0") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "tiny") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "small") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "nicehash") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "1") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "default") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "antminer") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "antmain") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "2") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "respect") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "respectable") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "whatsminer") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "3") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "yuge") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "huge") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "4") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "antmain2") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "antminer2") &&
+		strcasecmp(datum_config.stratum_v1_coinbase_selection, "s21") &&
+		strcmp(datum_config.stratum_v1_coinbase_selection, "5")) {
+		DLOG_FATAL("Unknown stratum.coinbase_selection \"%s\" in force mode.", datum_config.stratum_v1_coinbase_selection);
 		return 0;
 	}
 	
