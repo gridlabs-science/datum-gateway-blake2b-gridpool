@@ -1,0 +1,32 @@
+name: GridLabs Blake Build
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        api: [ON, OFF]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libcurl4-openssl-dev libjansson-dev libsodium-dev libmicrohttpd-dev
+      - name: Configure
+        run: cmake -S . -B build -DENABLE_API=${{ matrix.api }} -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_C_FLAGS="-Wall -Werror"
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Internal tests
+        run: ./build/datum_gateway --test
