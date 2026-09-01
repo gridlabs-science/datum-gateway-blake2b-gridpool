@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y \
     libmicrohttpd12 \
     libsodium23 \
     libcurl4 \
+    jq \
     netcat-traditional \
     --no-install-recommends \
     && apt-get clean \
@@ -53,7 +54,7 @@ RUN mkdir -p /app/config
 RUN ldd /app/datum_gateway
 
 # Create a non-root user
-RUN useradd -r -s /bin/false datumuser && \
+RUN useradd --uid 1000 --no-create-home -s /bin/false datumuser && \
     chown -R datumuser:datumuser /app
 
 # Change to non-root user
