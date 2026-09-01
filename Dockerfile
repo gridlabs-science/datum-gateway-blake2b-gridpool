@@ -59,12 +59,10 @@ RUN useradd -r -s /bin/false datumuser && \
 # Change to non-root user
 USER datumuser
 
-# Set up healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD nc -zv localhost 23334 || exit 1
-
-# Expose ports
-EXPOSE 23334/tcp 7152/tcp
+# Appliance wrappers configure and health-check their selected listener. The
+# Blake GridPool packages use 3333 while standalone DATUM retains its own
+# configurable default.
+EXPOSE 3333/tcp 7152/tcp
 
 # Create a volume for configuration and data
 VOLUME ["/app/config"]
